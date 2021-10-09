@@ -26,7 +26,6 @@ top_4_receivers_lagged <- data_group_par_receveur %>%
   mutate(rang_before = dplyr::lag(rang, 1),
          yards_cumu_before = dplyr::lag(yards_cumu,1)) %>% 
   ungroup() %>% 
-  dplyr::filter(rang_before <= 5) %>% 
   select(receiver_player_id,
          receiver,
          week,
@@ -34,28 +33,55 @@ top_4_receivers_lagged <- data_group_par_receveur %>%
          defteam,
          yards,
          yards_cumu_before,
+         yards_cumu,
          rang_before)
 
 
-predicted_week_3 <- top_4_receivers_lagged %>% 
-  filter(week == 2) %>% 
+estimates_week_4 <- top_4_receivers_lagged %>% 
+  filter(week %in% c(2,3)) %>% 
   group_by(defteam, week) %>% 
   nest() %>% 
   mutate(model = map(data, ~lm(yards ~ - 1 + yards_cumu_before, data = .x) %>% 
                        tidy)) %>% 
   unnest(c(model,
          data)) %>% 
-  mutate(predicted_yards = estimate*yards_cumu_before) 
+  group_by(defteam) %>%
+  summarise(average_estimate = mean(estimate)) 
 
 
-predicted_week_3%>% 
-  ggplot(aes(x = predicted_yards,
-             y = yards)) +
+matchups_week_4 <- nflfastR::fast_scraper_schedules(2021) %>% 
+  filter(week == 4) %>% 
+  select(posteam = away_team,
+         defteam_week_4 = home_team) %>% 
+  bind_rows(
+    nflfastR::fast_scraper_schedules(2021) %>% 
+      filter(week == 4) %>% 
+      select(posteam = home_team,
+             defteam_week_4 = away_team)
+  )
+
+
+
+estimates_week_4_for_players <- top_4_receivers_lagged %>% 
+  filter(week == 3) %>% 
+  left_join(matchups_week_4, by = "posteam") %>% 
+  select(receiver,
+         posteam,
+         yards_cumu,
+         defteam_week_4) %>% 
+  left_join(estimates_week_4, by = c("defteam_week_4" = "defteam")) %>% 
+  mutate(final_estimate = yards_cumu * average_estimate) %>% 
+  arrange(desc(final_estimate))
+
+
+top_4_receivers_lagged %>% 
+  filter(week == 4) %>% 
+  left_join(estimates_week_4_for_players %>% 
+              select(-yards_cumu)) %>% 
+  ggplot(aes(x = final_estimate,
+             y = yards)) + 
   geom_point() +
-  geom_abline(slope = 1, col = "red") +
-  theme_bw() 
-
-predicted_week_3 %>% 
-  ungroup() %>% 
-  summarise(MAE(predicted_yards,yards))
-
+  geom_label(aes(label = receiver)) +
+  geom_abline(slope = 1) +
+  theme_bw()
+  
